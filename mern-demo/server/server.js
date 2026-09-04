@@ -1,3 +1,4 @@
+
 const express = require("express");
 const mongoose = require("mongoose");
 require("dotenv").config();
@@ -15,7 +16,25 @@ app.use(express.json());
 // TEST BACKEND
 // =========================
 app.get("/", (req, res) => {
-  res.send("Backend cloud Lab đang hoạt động!");
+  res.status(200).send("Backend cloud Lab đang hoạt động!");
+});
+
+// =========================
+// KIỂM TRA MONGODB
+// =========================
+app.get("/api/health", (req, res) => {
+  const states = {
+    0: "disconnected",
+    1: "connected",
+    2: "connecting",
+    3: "disconnecting",
+  };
+
+  res.status(200).json({
+    server: "OK",
+    mongodb: states[mongoose.connection.readyState],
+    readyState: mongoose.connection.readyState,
+  });
 });
 
 // =========================
@@ -23,7 +42,14 @@ app.get("/", (req, res) => {
 // =========================
 app.get("/api/students", async (req, res) => {
   try {
-    const students = await Student.find();
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        message: "MongoDB chưa kết nối!",
+        mongodbState: mongoose.connection.readyState,
+      });
+    }
+
+    const students = await Student.find().sort({ createdAt: -1 });
 
     res.status(200).json(students);
   } catch (error) {
@@ -41,16 +67,21 @@ app.get("/api/students", async (req, res) => {
 // =========================
 app.post("/api/students", async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        message: "MongoDB chưa kết nối!",
+        mongodbState: mongoose.connection.readyState,
+      });
+    }
+
     const { studentId, name, email } = req.body;
 
-    // Kiểm tra dữ liệu
     if (!studentId || !name || !email) {
       return res.status(400).json({
         message: "Vui lòng nhập đầy đủ thông tin!",
       });
     }
 
-    // Kiểm tra MSSV đã tồn tại
     const existingStudent = await Student.findOne({
       studentId: studentId,
     });
@@ -61,17 +92,18 @@ app.post("/api/students", async (req, res) => {
       });
     }
 
-    // Tạo sinh viên mới
     const student = new Student({
       studentId: studentId,
       name: name,
       email: email,
     });
 
-    // Lưu MongoDB
     const savedStudent = await student.save();
 
-    res.status(201).json(savedStudent);
+    res.status(201).json({
+      message: "Thêm sinh viên thành công!",
+      student: savedStudent,
+    });
   } catch (error) {
     console.error("Lỗi thêm sinh viên:", error);
 
@@ -83,22 +115,112 @@ app.post("/api/students", async (req, res) => {
 });
 
 // =========================
-// KẾT NỐI MONGODB ATLAS
+// PUT CẬP NHẬT SINH VIÊN
 // =========================
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log("MongoDB Atlas connected successfully!");
-  })
-  .catch((error) => {
-    console.error("MongoDB connection error:", error);
-  });
+app.put("/api/students/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { studentId, name, email } = req.body;
+
+    if (!studentId || !name || !email) {
+      return res.status(400).json({
+        message: "Vui lòng nhập đầy đủ thông tin!",
+      });
+    }
+
+    const student = await Student.findByIdAndUpdate(
+      id,
+      {
+        studentId: studentId,
+        name: name,
+        email: email,
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!student) {
+      return res.status(404).json({
+        message: "Không tìm thấy sinh viên!",
+      });
+    }
+
+    res.status(200).json({
+      message: "Cập nhật sinh viên thành công!",
+      student: student,
+    });
+  } catch (error) {
+    console.error("Lỗi cập nhật sinh viên:", error);
+
+    res.status(500).json({
+      message: "Không thể cập nhật sinh viên",
+      error: error.message,
+    });
+  }
+});
 
 // =========================
-// PORT
+// DELETE XÓA SINH VIÊN
+// =========================
+app.delete("/api/students/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const student = await Student.findByIdAndDelete(id);
+
+    if (!student) {
+      return res.status(404).json({
+        message: "Không tìm thấy sinh viên!",
+      });
+    }
+
+    res.status(200).json({
+      message: "Xóa sinh viên thành công!",
+      student: student,
+    });
+  } catch (error) {
+    console.error("Lỗi xóa sinh viên:", error);
+
+    res.status(500).json({
+      message: "Không thể xóa sinh viên",
+      error: error.message,
+    });
+  }
+});
+
+// =========================
+// KẾT NỐI MONGODB ATLAS
 // =========================
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-});
+async function startServer() {
+  try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error("Không tìm thấy MONGODB_URI trong file .env");
+    }
+
+    console.log("Đang kết nối MongoDB Atlas...");
+
+    await mongoose.connect(process.env.MONGODB_URI);
+
+    console.log("MongoDB Atlas connected successfully!");
+    console.log("MongoDB readyState:", mongoose.connection.readyState);
+    console.log("Database:", mongoose.connection.name);
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("MongoDB connection error:");
+    console.error(error.message);
+
+    process.exit(1);
+  }
+}
+
+// =========================
+// KHỞI ĐỘNG SERVER
+// =========================
+startServer();
